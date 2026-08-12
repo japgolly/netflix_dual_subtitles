@@ -13,7 +13,6 @@
       '.watch-video',
       '[data-uia="watch-video"]',
       '.videoplayer',
-      '.PlayerControlsNeo__all-controls',
       'body'
     ],
     video: 'video'
@@ -395,9 +394,13 @@
 
       <div class="nds-field-group">
         <label class="nds-label">Secondary Language</label>
-        <select class="nds-select" id="nds-select-language">
-          <option value="">Select track...</option>
-        </select>
+        <div class="nds-custom-dropdown" id="nds-custom-dropdown">
+          <button type="button" class="nds-dropdown-trigger" id="nds-dropdown-trigger">
+            <span id="nds-dropdown-selected-label">-- None (Off) --</span>
+            <span class="nds-dropdown-arrow">▾</span>
+          </button>
+          <div class="nds-dropdown-menu" id="nds-dropdown-menu"></div>
+        </div>
       </div>
 
       <div class="nds-field-group nds-switch-row">
@@ -466,47 +469,19 @@
       };
     }
 
-    const langSelect = document.getElementById('nds-select-language');
-    if (langSelect) {
-      langSelect.addEventListener('focus', () => { isInteractingWithSelect = true; });
-      langSelect.addEventListener('blur', () => { isInteractingWithSelect = false; });
-      langSelect.addEventListener('mouseenter', () => { isInteractingWithSelect = true; });
-      langSelect.addEventListener('mouseleave', () => {
-        if (document.activeElement !== langSelect) {
-          isInteractingWithSelect = false;
+    const customDropdown = document.getElementById('nds-custom-dropdown');
+    const dropdownTrigger = document.getElementById('nds-dropdown-trigger');
+    if (customDropdown && dropdownTrigger) {
+      dropdownTrigger.onclick = (e) => {
+        e.stopPropagation();
+        customDropdown.classList.toggle('open');
+      };
+      
+      window.addEventListener('click', (e) => {
+        if (!customDropdown.contains(e.target)) {
+          customDropdown.classList.remove('open');
         }
       });
-
-      langSelect.onchange = (e) => {
-        isInteractingWithSelect = false;
-        const selectedId = e.target.value;
-        state.secondaryTrackId = selectedId;
-
-        const trackObj = state.tracks.find(t => t.id === selectedId);
-        if (trackObj) {
-          state.secondaryLanguageCode = trackObj.bcp47 || trackObj.language;
-        }
-
-        autoFetchedSecondary = true;
-        savePreferences();
-
-        const targetLang = state.secondaryLanguageCode;
-        const baseLang = targetLang ? targetLang.split('-')[0] : null;
-
-        if (baseLang && state.cuesMap.has(baseLang)) {
-          log('Switched active cues to selected base language code:', baseLang);
-        } else if (targetLang && state.cuesMap.has(targetLang)) {
-          log('Switched active cues to selected languageCode:', targetLang);
-        } else if (state.cuesMap.has(selectedId)) {
-          log('Switched active cues to selected trackId:', selectedId);
-        } else {
-          log('Requesting fetch for secondary trackId:', selectedId);
-          window.postMessage({
-            type: 'NETFLIX_DUAL_SUB_FETCH_TRACK',
-            trackId: selectedId
-          }, '*');
-        }
-      };
     }
 
     panelEl.querySelectorAll('.nds-option-btn').forEach(btn => {
@@ -543,32 +518,57 @@
   }
 
   let lastPopulatedTrackSignature = '';
-  let isInteractingWithSelect = false;
+
+  function selectTrack(trackId, bcp47Code, labelText) {
+    state.secondaryTrackId = trackId;
+    if (bcp47Code) state.secondaryLanguageCode = bcp47Code;
+
+    const customDropdown = document.getElementById('nds-custom-dropdown');
+    if (customDropdown) customDropdown.classList.remove('open');
+
+    autoFetchedSecondary = true;
+    savePreferences();
+    lastPopulatedTrackSignature = '';
+    populateLanguageSelect();
+
+    if (trackId) {
+      log('Requesting fetch for secondary trackId:', trackId);
+      window.postMessage({
+        type: 'NETFLIX_DUAL_SUB_FETCH_TRACK',
+        trackId: trackId
+      }, '*');
+    }
+  }
 
   function populateLanguageSelect() {
-    const langSelect = document.getElementById('nds-select-language');
-    if (!langSelect) return;
+    const dropdownMenu = document.getElementById('nds-dropdown-menu');
+    const selectedLabelEl = document.getElementById('nds-dropdown-selected-label');
+    if (!dropdownMenu || !selectedLabelEl) return;
 
-    // Do NOT modify DOM while the user is focused on, hovering, or interacting with the dropdown
-    if (isInteractingWithSelect || document.activeElement === langSelect || langSelect.matches(':focus') || langSelect.matches(':active')) {
-      return;
-    }
-
-    // Compare signature to prevent unnecessary innerHTML re-renders that force-close the dropdown
-    const addedIds = new Set();
     const signatureParts = [];
     state.tracks.forEach(t => signatureParts.push(`${t.id}:${t.label}:${t.bcp47}`));
     state.cuesMap.forEach((cues, key) => signatureParts.push(`${key}:${cues.length}`));
     const newSignature = signatureParts.join('|') + `|selected:${state.secondaryTrackId}`;
 
-    if (newSignature === lastPopulatedTrackSignature && langSelect.options.length > 1) {
+    if (newSignature === lastPopulatedTrackSignature && dropdownMenu.children.length > 0) {
       return;
     }
-
     lastPopulatedTrackSignature = newSignature;
 
+    dropdownMenu.innerHTML = '';
     const currentVal = state.secondaryTrackId;
-    langSelect.innerHTML = '<option value="">-- None (Off) --</option>';
+    let selectedLabelText = '-- None (Off) --';
+
+    const noneItem = document.createElement('div');
+    noneItem.className = `nds-dropdown-item ${!currentVal ? 'selected' : ''}`;
+    noneItem.innerText = '-- None (Off) --';
+    noneItem.onclick = (e) => {
+      e.stopPropagation();
+      selectTrack('', null, '-- None (Off) --');
+    };
+    dropdownMenu.appendChild(noneItem);
+
+    const addedIds = new Set();
 
     state.tracks.forEach((t, idx) => {
       if (t.isNone) return;
@@ -578,26 +578,42 @@
 
       const displayLabel = formatLanguageLabel(t.label, t.bcp47 || t.language);
       const isPrimary = (trackId === state.currentPrimaryTrackId);
+      const fullLabel = displayLabel + (isPrimary ? ' (Primary)' : '');
+      const isSelected = (trackId === currentVal || (state.secondaryLanguageCode && isLanguageMatch(t.bcp47 || t.language, state.secondaryLanguageCode)));
 
-      const opt = document.createElement('option');
-      opt.value = trackId;
-      opt.innerText = displayLabel + (isPrimary ? ' (Primary)' : '');
-      if (trackId === currentVal || (state.secondaryLanguageCode && isLanguageMatch(t.bcp47 || t.language, state.secondaryLanguageCode))) {
-        opt.selected = true;
+      if (isSelected) {
+        selectedLabelText = fullLabel;
       }
-      langSelect.appendChild(opt);
+
+      const item = document.createElement('div');
+      item.className = `nds-dropdown-item ${isSelected ? 'selected' : ''}`;
+      item.innerText = fullLabel;
+      item.onclick = (e) => {
+        e.stopPropagation();
+        selectTrack(trackId, t.bcp47 || t.language, fullLabel);
+      };
+      dropdownMenu.appendChild(item);
     });
 
     state.cuesMap.forEach((cues, key) => {
       if (!addedIds.has(key)) {
         addedIds.add(key);
-        const opt = document.createElement('option');
-        opt.value = key;
-        opt.innerText = `Captured Track (${cues.length} cues)`;
-        if (key === currentVal) opt.selected = true;
-        langSelect.appendChild(opt);
+        const fullLabel = `Captured Track (${cues.length} cues)`;
+        const isSelected = (key === currentVal);
+        if (isSelected) selectedLabelText = fullLabel;
+
+        const item = document.createElement('div');
+        item.className = `nds-dropdown-item ${isSelected ? 'selected' : ''}`;
+        item.innerText = fullLabel;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          selectTrack(key, null, fullLabel);
+        };
+        dropdownMenu.appendChild(item);
       }
     });
+
+    selectedLabelEl.innerText = selectedLabelText;
   }
 
   if (typeof window !== 'undefined') {
