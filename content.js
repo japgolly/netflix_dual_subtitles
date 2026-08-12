@@ -468,7 +468,17 @@
 
     const langSelect = document.getElementById('nds-select-language');
     if (langSelect) {
+      langSelect.addEventListener('focus', () => { isInteractingWithSelect = true; });
+      langSelect.addEventListener('blur', () => { isInteractingWithSelect = false; });
+      langSelect.addEventListener('mouseenter', () => { isInteractingWithSelect = true; });
+      langSelect.addEventListener('mouseleave', () => {
+        if (document.activeElement !== langSelect) {
+          isInteractingWithSelect = false;
+        }
+      });
+
       langSelect.onchange = (e) => {
+        isInteractingWithSelect = false;
         const selectedId = e.target.value;
         state.secondaryTrackId = selectedId;
 
@@ -532,14 +542,33 @@
     rootEl.appendChild(triggerBtnEl);
   }
 
+  let lastPopulatedTrackSignature = '';
+  let isInteractingWithSelect = false;
+
   function populateLanguageSelect() {
     const langSelect = document.getElementById('nds-select-language');
     if (!langSelect) return;
 
+    // Do NOT modify DOM while the user is focused on, hovering, or interacting with the dropdown
+    if (isInteractingWithSelect || document.activeElement === langSelect || langSelect.matches(':focus') || langSelect.matches(':active')) {
+      return;
+    }
+
+    // Compare signature to prevent unnecessary innerHTML re-renders that force-close the dropdown
+    const addedIds = new Set();
+    const signatureParts = [];
+    state.tracks.forEach(t => signatureParts.push(`${t.id}:${t.label}:${t.bcp47}`));
+    state.cuesMap.forEach((cues, key) => signatureParts.push(`${key}:${cues.length}`));
+    const newSignature = signatureParts.join('|') + `|selected:${state.secondaryTrackId}`;
+
+    if (newSignature === lastPopulatedTrackSignature && langSelect.options.length > 1) {
+      return;
+    }
+
+    lastPopulatedTrackSignature = newSignature;
+
     const currentVal = state.secondaryTrackId;
     langSelect.innerHTML = '<option value="">-- None (Off) --</option>';
-
-    const addedIds = new Set();
 
     state.tracks.forEach((t, idx) => {
       if (t.isNone) return;
