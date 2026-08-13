@@ -11,11 +11,8 @@ describe('Japanese Furigana & Okurigana Engine', () => {
       }
     };
 
-    const kuromojiCode = fs.readFileSync(path.resolve(__dirname, '../kuromoji.js'), 'utf8');
-    eval(kuromojiCode);
-
-    const furiganaCode = fs.readFileSync(path.resolve(__dirname, '../furigana.js'), 'utf8');
-    eval(furiganaCode);
+    require('../kuromoji.js');
+    require('../furigana.js');
 
     try {
       await window.NetflixDualSubsFurigana.initKuromoji();

@@ -19,9 +19,7 @@ describe('Internationalized Language Label Formatter', () => {
       }
     };
 
-    // Load content.js directly into window context (testing exact production code)
-    const code = fs.readFileSync(path.resolve(__dirname, '../content.js'), 'utf8');
-    eval(code);
+    require('../content.js');
 
     formatLanguageLabel = window.__netflixDualSubsContentUtils.formatLanguageLabel;
   });

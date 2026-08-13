@@ -6,9 +6,7 @@ describe('Subtitle Payload & Timestamp Parsers', () => {
   let parseTime, parseTTML, parseJSONTimedText, parseVTT, isSubtitleUrl, extractResponseText;
 
   beforeAll(() => {
-    // Load injected.js directly into window context (testing exact production code)
-    const code = fs.readFileSync(path.resolve(__dirname, '../injected.js'), 'utf8');
-    eval(code);
+    require('../injected.js');
 
     const utils = window.__netflixDualSubsInjectedUtils;
     parseTime = utils.parseTime;

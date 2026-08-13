@@ -4,7 +4,8 @@
   "description": "A Manifest V3 Chrome Extension that allows you to render two subtitle tracks simultaneously on Netflix with automatic timestamp synchronization.",
   "main": "content.js",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +15,7 @@
     "kuromoji": "^0.1.2"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
     "jsdom": "^26.0.0",
     "vitest": "^4.1.10"
   }

@@ -19,18 +19,14 @@ describe('Netflix Mock Data Integration Tests', () => {
       }
     };
 
-    // Load injected.js directly into window context
-    const injectedCode = fs.readFileSync(path.resolve(__dirname, '../injected.js'), 'utf8');
-    eval(injectedCode);
+    require('../injected.js');
 
     const injectedUtils = window.__netflixDualSubsInjectedUtils;
     parseJSONTimedText = injectedUtils.parseJSONTimedText;
     parseTTML = injectedUtils.parseTTML;
     parseVTT = injectedUtils.parseVTT;
 
-    // Load content.js directly into window context
-    const contentCode = fs.readFileSync(path.resolve(__dirname, '../content.js'), 'utf8');
-    eval(contentCode);
+    require('../content.js');
 
     const contentUtils = window.__netflixDualSubsContentUtils;
     formatLanguageLabel = contentUtils.formatLanguageLabel;
