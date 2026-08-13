@@ -95,7 +95,7 @@
         }
 
         let textHtml = p.innerHTML
-          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<br\b[^>]*>/gi, '\n')
           .replace(/<[^>]+>/g, '')
           .trim();
 
