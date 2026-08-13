@@ -557,16 +557,7 @@
 
     dropdownMenu.innerHTML = '';
     const currentVal = state.secondaryTrackId;
-    let selectedLabelText = '-- None (Off) --';
-
-    const noneItem = document.createElement('div');
-    noneItem.className = `nds-dropdown-item ${!currentVal ? 'selected' : ''}`;
-    noneItem.innerText = '-- None (Off) --';
-    noneItem.onclick = (e) => {
-      e.stopPropagation();
-      selectTrack('', null, '-- None (Off) --');
-    };
-    dropdownMenu.appendChild(noneItem);
+    let selectedLabelText = '';
 
     const addedIds = new Set();
 
@@ -581,7 +572,7 @@
       const fullLabel = displayLabel + (isPrimary ? ' (Primary)' : '');
       const isSelected = (trackId === currentVal || (state.secondaryLanguageCode && isLanguageMatch(t.bcp47 || t.language, state.secondaryLanguageCode)));
 
-      if (isSelected) {
+      if (isSelected || (!selectedLabelText && idx === 0)) {
         selectedLabelText = fullLabel;
       }
 
@@ -600,7 +591,7 @@
         addedIds.add(key);
         const fullLabel = `Captured Track (${cues.length} cues)`;
         const isSelected = (key === currentVal);
-        if (isSelected) selectedLabelText = fullLabel;
+        if (isSelected || !selectedLabelText) selectedLabelText = fullLabel;
 
         const item = document.createElement('div');
         item.className = `nds-dropdown-item ${isSelected ? 'selected' : ''}`;
@@ -613,7 +604,9 @@
       }
     });
 
-    selectedLabelEl.innerText = selectedLabelText;
+    if (selectedLabelText) {
+      selectedLabelEl.innerText = selectedLabelText;
+    }
   }
 
   if (typeof window !== 'undefined') {
