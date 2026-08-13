@@ -396,7 +396,7 @@
         <label class="nds-label">Secondary Language</label>
         <div class="nds-custom-dropdown" id="nds-custom-dropdown">
           <button type="button" class="nds-dropdown-trigger" id="nds-dropdown-trigger">
-            <span id="nds-dropdown-selected-label">-- None (Off) --</span>
+            <span id="nds-dropdown-selected-label">Select track...</span>
             <span class="nds-dropdown-arrow">▾</span>
           </button>
           <div class="nds-dropdown-menu" id="nds-dropdown-menu"></div>
