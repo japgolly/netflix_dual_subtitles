@@ -11,6 +11,8 @@
 
   let pendingTrackId = null;
   let pendingTrackBcp47 = null;
+  let previousPrimaryTrack = null;
+  let restoreTrackTimer = null;
   let lastSessionId = null;
 
   const SUBTITLE_URL_PATTERNS = [/timedtext/i, /ttml/i, /dfxp/i, /vtt/i, /\/\?o=/i];
@@ -50,27 +52,58 @@
     return '';
   }
 
-  // Parse time helper (HH:MM:SS.mmm or MM:SS.mmm or seconds or ticks)
+  // Parse time helper (HH:MM:SS.mmm or MM:SS.mmm or seconds or ticks or frames)
   function parseTime(timeStr) {
     if (typeof timeStr === 'number') return timeStr / 1000;
     if (!timeStr) return 0;
     
-    if (timeStr.endsWith('ms')) return parseFloat(timeStr) / 1000;
-    if (timeStr.endsWith('s')) return parseFloat(timeStr);
-    if (timeStr.endsWith('t')) return parseFloat(timeStr) / 10000000;
+    const str = String(timeStr).trim();
+    if (str.endsWith('ms')) return parseFloat(str) / 1000;
+    if (str.endsWith('s')) return parseFloat(str);
+    if (str.endsWith('t')) return parseFloat(str) / 10000000;
 
-    const parts = timeStr.split(':');
-    if (parts.length === 3) {
-      const hrs = parseFloat(parts[0]);
-      const mins = parseFloat(parts[1]);
-      const secs = parseFloat(parts[2].replace(',', '.'));
+    const parts = str.split(':');
+    if (parts.length === 4) {
+      const hrs = parseFloat(parts[0]) || 0;
+      const mins = parseFloat(parts[1]) || 0;
+      const secs = parseFloat(parts[2]) || 0;
+      const sub = parseFloat(parts[3].replace(',', '.')) || 0;
+      const subSec = sub > 60 ? sub / 1000 : sub / 30;
+      return hrs * 3600 + mins * 60 + secs + subSec;
+    } else if (parts.length === 3) {
+      const hrs = parseFloat(parts[0]) || 0;
+      const mins = parseFloat(parts[1]) || 0;
+      const secs = parseFloat(parts[2].replace(',', '.')) || 0;
       return hrs * 3600 + mins * 60 + secs;
     } else if (parts.length === 2) {
-      const mins = parseFloat(parts[0]);
-      const secs = parseFloat(parts[1].replace(',', '.'));
+      const mins = parseFloat(parts[0]) || 0;
+      const secs = parseFloat(parts[1].replace(',', '.')) || 0;
       return mins * 60 + secs;
     }
-    return parseFloat(timeStr) || 0;
+    return parseFloat(str) || 0;
+  }
+
+  function extractNodeText(el) {
+    if (!el) return '';
+    let text = '';
+    const childNodes = el.childNodes;
+    if (!childNodes || childNodes.length === 0) {
+      return (el.textContent || '').trim();
+    }
+    for (let i = 0; i < childNodes.length; i++) {
+      const node = childNodes[i];
+      if (node.nodeType === 1) {
+        const tag = (node.localName || node.nodeName || '').toLowerCase();
+        if (tag === 'br') {
+          text += '\n';
+        } else {
+          text += extractNodeText(node);
+        }
+      } else if (node.nodeType === 3) {
+        text += node.nodeValue || '';
+      }
+    }
+    return text;
   }
 
   // TTML / DFXP XML Parser
@@ -79,9 +112,12 @@
     try {
       const parser = new DOMParser();
       const doc = parser.parseFromString(xmlText, 'text/xml');
-      const paragraphs = doc.querySelectorAll('p');
+      let paragraphs = doc.getElementsByTagNameNS ? doc.getElementsByTagNameNS('*', 'p') : [];
+      if (!paragraphs || paragraphs.length === 0) {
+        paragraphs = doc.querySelectorAll('p, [begin]');
+      }
       
-      paragraphs.forEach((p) => {
+      Array.from(paragraphs).forEach((p) => {
         const beginAttr = p.getAttribute('begin');
         const endAttr = p.getAttribute('end');
         const durAttr = p.getAttribute('dur');
@@ -94,13 +130,10 @@
           end = start + parseTime(durAttr);
         }
 
-        let textHtml = p.innerHTML
-          .replace(/<br\b[^>]*>/gi, '\n')
-          .replace(/<[^>]+>/g, '')
-          .trim();
+        let text = extractNodeText(p).trim();
 
-        if (start < end && textHtml) {
-          cues.push({ start, end, text: textHtml });
+        if (start < end && text) {
+          cues.push({ start, end, text });
         }
       });
     } catch (e) {
@@ -113,17 +146,25 @@
   function parseJSONTimedText(jsonObj) {
     const cues = [];
     try {
-      const events = jsonObj.events || (jsonObj.result && jsonObj.result.timedtext) || [];
+      const events = jsonObj.events || (jsonObj.result && jsonObj.result.timedtext) || (Array.isArray(jsonObj) ? jsonObj : []);
       events.forEach((evt) => {
-        const start = (evt.start || evt.startTime || 0) / 1000;
-        const duration = (evt.duration || evt.dur || 0) / 1000;
-        const end = evt.end ? evt.end / 1000 : (start + duration);
+        const start = (evt.tStartMs ?? evt.start ?? evt.startTime ?? evt.tOffsetMs ?? 0) / 1000;
+        const duration = (evt.dDurationMs ?? evt.duration ?? evt.dur ?? 0) / 1000;
+        const end = evt.end ? evt.end / 1000 : (evt.tEndMs ? evt.tEndMs / 1000 : (start + duration));
 
         let linesText = '';
-        if (evt.lines) {
-          linesText = evt.lines.map(l => typeof l === 'string' ? l : (l.text || '')).join('\n');
+        if (evt.segs && Array.isArray(evt.segs)) {
+          linesText = evt.segs.map(s => typeof s === 'string' ? s : (s.utf8 || s.text || s.value || '')).join('');
+        } else if (evt.lines && Array.isArray(evt.lines)) {
+          linesText = evt.lines.map(l => {
+            if (typeof l === 'string') return l;
+            if (l.segs && Array.isArray(l.segs)) {
+              return l.segs.map(s => typeof s === 'string' ? s : (s.utf8 || s.text || '')).join('');
+            }
+            return l.text || '';
+          }).join('\n');
         } else if (evt.text) {
-          linesText = typeof evt.text === 'string' ? evt.text : (evt.text.map(t => t.value || t).join(' '));
+          linesText = typeof evt.text === 'string' ? evt.text : (Array.isArray(evt.text) ? evt.text.map(t => typeof t === 'string' ? t : (t.value || t.utf8 || t.text || '')).join(' ') : (evt.text.value || ''));
         }
 
         linesText = linesText.replace(/<[^>]+>/g, '').trim();
@@ -148,7 +189,7 @@
       if (line.includes('-->')) {
         const parts = line.split('-->');
         const start = parseTime(parts[0].trim());
-        const end = parseTime(parts[1].trim().split(' ')[0]);
+        const end = parseTime(parts[1].trim().split(/\s+/)[0]);
 
         i++;
         let cueText = [];
@@ -156,8 +197,9 @@
           cueText.push(lines[i].trim());
           i++;
         }
-        const text = cueText.join('\n').replace(/<[^>]+>/g, '');
-        if (start < end && text) {
+        const text = cueText.join('\n').replace(/<[^>]+>/g, '').trim();
+        const isThumbnail = text.includes('#xywh=') || /\.(jpg|png|webp)/i.test(text);
+        if (start < end && text && !isThumbnail) {
           cues.push({ start, end, text });
         }
       }
@@ -175,7 +217,7 @@
         const json = JSON.parse(responseText);
         return parseJSONTimedText(json);
       } catch (e) {}
-    } else if (responseText.includes('</tt>') || responseText.includes('<tt') || responseText.includes('<p ')) {
+    } else if (responseText.includes('</tt>') || responseText.includes('<tt') || responseText.includes('<p') || responseText.includes('xmlns="http://www.w3.org/ns/ttml"')) {
       return parseTTML(responseText);
     } else if (responseText.includes('WEBVTT') || responseText.includes('-->')) {
       return parseVTT(responseText);
@@ -216,8 +258,8 @@
            safeGet(() => t.language ? String(t.language) : null) || 
            safeGet(() => t.name ? String(t.name) : null) || 
            safeGet(() => t.bcp47 ? String(t.bcp47) : null) || 
-           safeGet(() => t.id ? String(t.id) : null) || 
-           safeGet(() => t.trackId ? String(t.trackId) : null) || 
+           safeGet(() => (t.id !== undefined && t.id !== null) ? String(t.id) : null) || 
+           safeGet(() => (t.trackId !== undefined && t.trackId !== null) ? String(t.trackId) : null) || 
            `Track ${index + 1}`;
   }
 
@@ -225,9 +267,9 @@
     if (!t) return `track_${index}`;
     if (typeof t === 'string') return t;
 
-    const id = safeGet(() => typeof t.id === 'string' ? t.id : null) || 
-               safeGet(() => typeof t.trackId === 'string' ? t.trackId : null) || 
-               safeGet(() => typeof t.bcp47 === 'string' ? t.bcp47 : null);
+    const id = safeGet(() => (t.id !== undefined && t.id !== null) ? String(t.id) : null) || 
+               safeGet(() => (t.trackId !== undefined && t.trackId !== null) ? String(t.trackId) : null) || 
+               safeGet(() => (t.bcp47 !== undefined && t.bcp47 !== null) ? String(t.bcp47) : null);
 
     if (id) return id;
     return safeGet(() => extractTrackLabel(t, index), `track_${index}`);
@@ -256,14 +298,30 @@
     return { trackId: 'current_track', bcp47: null };
   }
 
+  function clearPendingTrack() {
+    if (restoreTrackTimer) {
+      clearTimeout(restoreTrackTimer);
+      restoreTrackTimer = null;
+    }
+    if (previousPrimaryTrack) {
+      const player = getNetflixPlayer();
+      if (player && player.setTimedTextTrack) {
+        safeGet(() => player.setTimedTextTrack(previousPrimaryTrack));
+      }
+      previousPrimaryTrack = null;
+    }
+    pendingTrackId = null;
+    pendingTrackBcp47 = null;
+  }
+
   // Intercept Network Requests (XHR & Fetch)
   function handleInterceptedSubtitles(responseText, url) {
     try {
       const cues = parseSubtitlePayload(responseText, url);
       if (cues && cues.length > 0) {
         const trackInfo = safeGet(() => getCurrentActiveTrackInfo(), { trackId: 'captured_track', bcp47: null });
-        const activeTrackId = trackInfo.trackId || pendingTrackId || 'captured_track';
-        const activeBcp47 = trackInfo.bcp47 || pendingTrackBcp47 || null;
+        const activeTrackId = pendingTrackId || trackInfo.trackId || 'captured_track';
+        const activeBcp47 = pendingTrackBcp47 || trackInfo.bcp47 || null;
 
         log(`Intercepted ${cues.length} cues for trackId: ${activeTrackId}, bcp47: ${activeBcp47}`);
 
@@ -274,6 +332,12 @@
           bcp47: activeBcp47 ? String(activeBcp47) : null,
           cues: cues
         }, '*');
+
+        if (pendingTrackId) {
+          setTimeout(() => {
+            clearPendingTrack();
+          }, 150);
+        }
       }
     } catch (err) {
       logError('Subtitle processing error:', err);
@@ -291,9 +355,16 @@
   XMLHttpRequest.prototype.send = function () {
     this.addEventListener('load', function () {
       if (isSubtitleUrl(this._url)) {
-        const responseText = extractResponseText(this);
-        if (responseText) {
-          handleInterceptedSubtitles(responseText, this._url);
+        if (this.responseType === 'blob' && this.response instanceof Blob) {
+          const selfUrl = this._url;
+          this.response.text().then(text => {
+            if (text) handleInterceptedSubtitles(text, selfUrl);
+          }).catch(() => {});
+        } else {
+          const responseText = extractResponseText(this);
+          if (responseText) {
+            handleInterceptedSubtitles(responseText, this._url);
+          }
         }
       }
     });
@@ -303,7 +374,8 @@
   const origFetch = window.fetch;
   window.fetch = async function () {
     const response = await origFetch.apply(this, arguments);
-    const url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url ? arguments[0].url : '');
+    const rawArg = arguments[0];
+    const url = typeof rawArg === 'string' ? rawArg : (rawArg && rawArg.url ? rawArg.url : (rawArg && rawArg.href ? rawArg.href : ''));
     
     if (isSubtitleUrl(url)) {
       try {
@@ -360,21 +432,17 @@
           safeGet(() => t.language) === targetTrackId
         );
         if (match && player.setTimedTextTrack) {
-          const previousTrack = safeGet(() => player.getTimedTextTrack());
+          previousPrimaryTrack = safeGet(() => player.getTimedTextTrack());
           pendingTrackId = targetTrackId;
           pendingTrackBcp47 = safeGet(() => match.bcp47 || match.language || targetTrackId, targetTrackId);
           log('Requesting secondary track load for:', targetTrackId, 'bcp47:', pendingTrackBcp47);
           
           player.setTimedTextTrack(match);
           
-          // Switch back to primary after Netflix fetches secondary timedtext
-          setTimeout(() => {
-            if (previousTrack && previousTrack !== match) {
-              player.setTimedTextTrack(previousTrack);
-            }
-            pendingTrackId = null;
-            pendingTrackBcp47 = null;
-          }, 1000);
+          if (restoreTrackTimer) clearTimeout(restoreTrackTimer);
+          restoreTrackTimer = setTimeout(() => {
+            clearPendingTrack();
+          }, 3500);
         }
       } catch (err) {
         logError('Error setting secondary track:', err);

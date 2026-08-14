@@ -95,6 +95,23 @@ Subtitle Line 2
       expect(cues[0].end).toBe(5.5);
       expect(cues[0].text).toBe('Subtitle Line 1\nSubtitle Line 2');
     });
+
+    it('should ignore thumbnail sprite VTT cues with #xywh or image urls', () => {
+      const vttWithThumbs = `WEBVTT
+
+00:00:00.000 --> 00:00:05.000
+#xywh=0,0,160,90
+
+00:00:05.000 --> 00:00:10.000
+https://example.com/thumb.jpg#xywh=160,0,160,90
+
+00:00:10.000 --> 00:00:15.000
+Real Subtitle Text
+`;
+      const cues = parseVTT(vttWithThumbs);
+      expect(cues.length).toBe(1);
+      expect(cues[0].text).toBe('Real Subtitle Text');
+    });
   });
 
   describe('Netflix JSON TimedText Parser', () => {
@@ -113,6 +130,35 @@ Subtitle Line 2
       expect(cues[0].start).toBe(2.0);
       expect(cues[0].end).toBe(5.5);
       expect(cues[0].text).toBe('JSON Subtitle Line 1\nJSON Subtitle Line 2');
+    });
+
+    it('should parse Netflix JSON with tStartMs, dDurationMs, and segs format', () => {
+      const jsonObj = {
+        events: [
+          {
+            tStartMs: 1200,
+            dDurationMs: 2800,
+            segs: [
+              { utf8: 'Hello ' },
+              { utf8: 'World' }
+            ]
+          },
+          {
+            tStartMs: 5000,
+            dDurationMs: 3000,
+            lines: [
+              { segs: [{ utf8: 'Line 1' }] },
+              { segs: [{ utf8: 'Line 2' }] }
+            ]
+          }
+        ]
+      };
+      const cues = parseJSONTimedText(jsonObj);
+      expect(cues.length).toBe(2);
+      expect(cues[0].start).toBe(1.2);
+      expect(cues[0].end).toBe(4.0);
+      expect(cues[0].text).toBe('Hello World');
+      expect(cues[1].text).toBe('Line 1\nLine 2');
     });
   });
 });

@@ -42,6 +42,7 @@
         kuromojiLib.builder({ dicPath: dictPath }).build((err, tokenizer) => {
           if (err) {
             logError('Error building Kuromoji tokenizer:', err);
+            initPromise = null;
             resolve(null);
             return;
           }
@@ -51,6 +52,7 @@
         });
       } catch (e) {
         logError('Exception initializing Kuromoji:', e);
+        initPromise = null;
         resolve(null);
       }
     });

@@ -182,5 +182,37 @@ describe('Comprehensive Coverage Expansion Suite', () => {
 
       expect(document.getElementById('nds-root')).toBeDefined();
     });
+
+    it('should ignore Alt+S shortcut when focus is in an INPUT or TEXTAREA element', () => {
+      const input = document.createElement('input');
+      document.body.appendChild(input);
+      input.focus();
+
+      const keyEvent = new KeyboardEvent('keydown', {
+        key: 's',
+        code: 'KeyS',
+        altKey: true,
+        bubbles: true
+      });
+      window.dispatchEvent(keyEvent);
+      expect(input.isConnected).toBe(true);
+    });
+
+    it('should test getWatchVideoId and isLanguageMatch content utilities', () => {
+      const utils = window.__netflixDualSubsContentUtils;
+      expect(utils.getWatchVideoId('https://www.netflix.com/watch/80186863?trackId=123')).toBe('80186863');
+      expect(utils.getWatchVideoId('https://www.netflix.com/browse')).toBe('https://www.netflix.com/browse');
+
+      expect(utils.isLanguageMatch('ja-JP', 'ja')).toBe(true);
+      expect(utils.isLanguageMatch('en-US', 'en-GB')).toBe(true);
+      expect(utils.isLanguageMatch('en', 'fr')).toBe(false);
+      expect(utils.isLanguageMatch(null, 'en')).toBe(false);
+    });
+
+    it('should test 4-part timestamp parsing with subseconds and frames', () => {
+      const parseTime = window.__netflixDualSubsInjectedUtils.parseTime;
+      expect(parseTime('00:01:20:500')).toBe(80.5);
+      expect(parseTime('00:01:20:15')).toBe(80.5);
+    });
   });
 });

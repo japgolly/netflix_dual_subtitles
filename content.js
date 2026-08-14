@@ -1,5 +1,7 @@
 (function () {
   'use strict';
+  if (window.__netflixDualSubsContentInjected) return;
+  window.__netflixDualSubsContentInjected = true;
 
   const DEBUG = false;
   const log = (...args) => DEBUG && console.log('[Netflix Dual Subtitles]', ...args);
@@ -44,11 +46,19 @@
   let videoEl = null;
   let animFrameId = null;
 
+  function getWatchVideoId(url) {
+    if (!url) return '';
+    const m = url.match(/\/watch\/(\d+)/);
+    return m ? m[1] : url.split('?')[0].split('#')[0];
+  }
+
+  let currentWatchVideoId = typeof window !== 'undefined' ? getWatchVideoId(window.location.href) : '';
+
   // Helper to compare language codes (e.g. "ja" vs "ja-JP")
   function isLanguageMatch(lang1, lang2) {
     if (!lang1 || !lang2) return false;
-    const c1 = lang1.toLowerCase().split('-')[0];
-    const c2 = lang2.toLowerCase().split('-')[0];
+    const c1 = String(lang1).toLowerCase().split('-')[0];
+    const c2 = String(lang2).toLowerCase().split('-')[0];
     return c1 === c2;
   }
 
@@ -70,6 +80,9 @@
     for (const selector of SELECTORS.playerContainers) {
       const el = document.querySelector(selector);
       if (el) return el;
+    }
+    if (videoEl && videoEl.parentElement) {
+      return videoEl.closest('.watch-video, [data-uia="watch-video"], .videoplayer, .nfp') || videoEl.parentElement;
     }
     return document.body;
   }
@@ -145,6 +158,47 @@
     });
   }
 
+  // Listen for real-time preferences changes (e.g. from popup or other tabs)
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'sync' && areaName !== 'local') return;
+      if (changes.nds_enabled !== undefined) {
+        state.enabled = Boolean(changes.nds_enabled.newValue);
+        const enableCb = document.getElementById('nds-toggle-enable');
+        if (enableCb) enableCb.checked = state.enabled;
+        if (triggerBtnEl) triggerBtnEl.classList.toggle('active', state.enabled);
+        if (!state.enabled && cueBoxEl) cueBoxEl.style.display = 'none';
+      }
+      if (changes.nds_furigana !== undefined) {
+        state.furigana = Boolean(changes.nds_furigana.newValue);
+        const furiganaCb = document.getElementById('nds-toggle-furigana');
+        if (furiganaCb) furiganaCb.checked = state.furigana;
+      }
+      if (changes.nds_fontSize !== undefined) {
+        state.fontSize = changes.nds_fontSize.newValue;
+        updateOverlayStyles();
+      }
+      if (changes.nds_position !== undefined) {
+        state.position = changes.nds_position.newValue;
+        updateOverlayStyles();
+      }
+      if (changes.nds_textStyle !== undefined) {
+        state.textStyle = changes.nds_textStyle.newValue;
+        updateOverlayStyles();
+      }
+      if (changes.nds_secondaryTrackId !== undefined) {
+        state.secondaryTrackId = changes.nds_secondaryTrackId.newValue;
+        populateLanguageSelect();
+        checkAndAutoFetchSecondaryTrack();
+      }
+      if (changes.nds_secondaryLanguageCode !== undefined) {
+        state.secondaryLanguageCode = changes.nds_secondaryLanguageCode.newValue;
+        populateLanguageSelect();
+        checkAndAutoFetchSecondaryTrack();
+      }
+    });
+  }
+
   function savePreferences() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
       chrome.storage.sync.set({
@@ -166,8 +220,8 @@
 
     const baseLang = state.secondaryLanguageCode ? state.secondaryLanguageCode.split('-')[0] : null;
 
-    // Check if we already have cues in memory for the secondary track
-    if (baseLang && state.cuesMap.has(baseLang)) {
+    // Check if we already have cues in memory for the secondary track (exact matches first!)
+    if (state.secondaryTrackId && state.cuesMap.has(state.secondaryTrackId)) {
       autoFetchedSecondary = true;
       return;
     }
@@ -175,7 +229,7 @@
       autoFetchedSecondary = true;
       return;
     }
-    if (state.secondaryTrackId && state.cuesMap.has(state.secondaryTrackId)) {
+    if (baseLang && state.cuesMap.has(baseLang)) {
       autoFetchedSecondary = true;
       return;
     }
@@ -183,8 +237,9 @@
     if (autoFetchedSecondary) return;
 
     const match = state.tracks.find(t => 
-      (state.secondaryLanguageCode && (isLanguageMatch(t.bcp47, state.secondaryLanguageCode) || isLanguageMatch(t.language, state.secondaryLanguageCode))) ||
       t.id === state.secondaryTrackId || 
+      (state.secondaryLanguageCode && (t.bcp47 === state.secondaryLanguageCode || t.language === state.secondaryLanguageCode)) ||
+      (state.secondaryLanguageCode && (isLanguageMatch(t.bcp47, state.secondaryLanguageCode) || isLanguageMatch(t.language, state.secondaryLanguageCode))) ||
       t.bcp47 === state.secondaryTrackId || 
       t.language === state.secondaryTrackId ||
       t.label.toLowerCase().includes((state.secondaryLanguageCode || state.secondaryTrackId).toLowerCase())
@@ -201,7 +256,7 @@
 
       // Retry after 2.5s if cues still haven't arrived
       setTimeout(() => {
-        if (baseLang && !state.cuesMap.has(baseLang) && !state.cuesMap.has(targetId)) {
+        if (!state.cuesMap.has(targetId) && (!state.secondaryLanguageCode || !state.cuesMap.has(state.secondaryLanguageCode))) {
           log('Cues not arrived yet, resetting autoFetchedSecondary for retry');
           autoFetchedSecondary = false;
         }
@@ -269,12 +324,13 @@
       let cues = null;
       const baseLang = state.secondaryLanguageCode ? state.secondaryLanguageCode.split('-')[0] : null;
 
-      if (baseLang && state.cuesMap.has(baseLang)) {
-        cues = state.cuesMap.get(baseLang);
+      // Exact track ID first, then exact BCP-47 code, then fallback base language
+      if (state.secondaryTrackId && state.cuesMap.has(state.secondaryTrackId)) {
+        cues = state.cuesMap.get(state.secondaryTrackId);
       } else if (state.secondaryLanguageCode && state.cuesMap.has(state.secondaryLanguageCode)) {
         cues = state.cuesMap.get(state.secondaryLanguageCode);
-      } else if (state.secondaryTrackId && state.cuesMap.has(state.secondaryTrackId)) {
-        cues = state.cuesMap.get(state.secondaryTrackId);
+      } else if (baseLang && state.cuesMap.has(baseLang)) {
+        cues = state.cuesMap.get(baseLang);
       }
 
       if (!cues || cues.length === 0) {
@@ -317,7 +373,7 @@
         videoEl = document.querySelector(SELECTORS.video);
       }
 
-      if (videoEl && !videoEl.paused) {
+      if (videoEl) {
         renderSecondaryCues(videoEl.currentTime);
       }
       animFrameId = requestAnimationFrame(tick);
@@ -458,6 +514,7 @@
         state.enabled = e.target.checked;
         savePreferences();
         if (triggerBtnEl) triggerBtnEl.classList.toggle('active', state.enabled);
+        if (!state.enabled && cueBoxEl) cueBoxEl.style.display = 'none';
       };
     }
 
@@ -560,6 +617,7 @@
     let selectedLabelText = '';
 
     const addedIds = new Set();
+    const trackHasExactMatch = state.tracks.some(t => t.id === currentVal);
 
     state.tracks.forEach((t, idx) => {
       if (t.isNone) return;
@@ -570,7 +628,9 @@
       const displayLabel = formatLanguageLabel(t.label, t.bcp47 || t.language);
       const isPrimary = (trackId === state.currentPrimaryTrackId);
       const fullLabel = displayLabel + (isPrimary ? ' (Primary)' : '');
-      const isSelected = (trackId === currentVal || (state.secondaryLanguageCode && isLanguageMatch(t.bcp47 || t.language, state.secondaryLanguageCode)));
+      const isSelected = trackHasExactMatch 
+        ? (trackId === currentVal)
+        : (Boolean(state.secondaryLanguageCode && isLanguageMatch(t.bcp47 || t.language, state.secondaryLanguageCode)));
 
       if (isSelected || (!selectedLabelText && idx === 0)) {
         selectedLabelText = fullLabel;
@@ -587,6 +647,9 @@
     });
 
     state.cuesMap.forEach((cues, key) => {
+      if (key.startsWith('http') || key.startsWith('/') || (key.length <= 5 && !key.startsWith('track_') && !key.startsWith('ls_'))) {
+        return;
+      }
       if (!addedIds.has(key)) {
         addedIds.add(key);
         const fullLabel = `Captured Track (${cues.length} cues)`;
@@ -631,6 +694,10 @@
 
     window.addEventListener('keydown', (e) => {
       if (e.altKey && (e.key === 's' || e.key === 'S' || e.code === 'KeyS')) {
+        const activeTag = document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '';
+        if (activeTag === 'input' || activeTag === 'textarea' || (document.activeElement && document.activeElement.isContentEditable)) {
+          return;
+        }
         e.preventDefault();
         log('Alt+S shortcut pressed');
         setPanelVisibility();
@@ -673,9 +740,11 @@
     });
 
     setInterval(() => {
-      if (window.location.href !== currentWatchUrl) {
+      const newWatchVideoId = getWatchVideoId(window.location.href);
+      if (newWatchVideoId !== currentWatchVideoId) {
+        currentWatchVideoId = newWatchVideoId;
         currentWatchUrl = window.location.href;
-        log('SPA Navigation detected! Resetting episode cues for new URL:', currentWatchUrl);
+        log('SPA Navigation detected! Resetting episode cues for new video ID:', currentWatchVideoId);
         resetEpisodeCues();
       }
       createOverlay();
@@ -690,7 +759,9 @@
 
   // Export utilities for testing
   window.__netflixDualSubsContentUtils = {
-    formatLanguageLabel: formatLanguageLabel
+    formatLanguageLabel: formatLanguageLabel,
+    isLanguageMatch: isLanguageMatch,
+    getWatchVideoId: getWatchVideoId
   };
 
 })();
