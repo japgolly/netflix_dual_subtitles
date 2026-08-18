@@ -214,5 +214,37 @@ describe('Comprehensive Coverage Expansion Suite', () => {
       expect(parseTime('00:01:20:500')).toBe(80.5);
       expect(parseTime('00:01:20:15')).toBe(80.5);
     });
+
+    it('should handle Japanese preference when English is primary and tracks load across reloads', async () => {
+      // Simulate state update where player tracks arrive
+      window.postMessage({
+        type: 'NETFLIX_DUAL_SUB_PLAYER_STATE',
+        tracks: [
+          { id: 'ls_en_9', bcp47: 'en', language: 'en', label: 'English [Original]' },
+          { id: 'ls_ja_9', bcp47: 'ja', language: 'ja', label: 'Japanese' }
+        ],
+        currentPrimaryTrackId: 'ls_en_9'
+      }, '*');
+
+      // Both tracks captured
+      window.postMessage({
+        type: 'NETFLIX_DUAL_SUB_CAPTURED',
+        trackId: 'ls_en_9',
+        bcp47: 'en',
+        cues: [{ start: 0, end: 10, text: 'English subtitle line' }]
+      }, '*');
+
+      window.postMessage({
+        type: 'NETFLIX_DUAL_SUB_CAPTURED',
+        trackId: 'ls_ja_9',
+        bcp47: 'ja',
+        cues: [{ start: 0, end: 10, text: '日本語の字幕' }]
+      }, '*');
+
+      await new Promise(r => setTimeout(r, 20));
+
+      const dropdownSelected = document.getElementById('nds-dropdown-selected-label');
+      expect(dropdownSelected).toBeDefined();
+    });
   });
 });

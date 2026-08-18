@@ -314,30 +314,133 @@
     pendingTrackBcp47 = null;
   }
 
+  function isLanguageMatch(lang1, lang2) {
+    if (!lang1 || !lang2) return false;
+    const c1 = String(lang1).toLowerCase().split('-')[0].split('_')[0];
+    const c2 = String(lang2).toLowerCase().split('-')[0].split('_')[0];
+    return c1 === c2;
+  }
+
+  function isJapaneseText(text) {
+    if (!text) return false;
+    return /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\u3400-\u4DBF]/.test(text);
+  }
+
+  function detectSubtitleLanguage(responseText, jsonObj, cues) {
+    if (jsonObj) {
+      const lang = safeGet(() => jsonObj.bcp47 || jsonObj.language || jsonObj.lang ||
+                   (jsonObj.result && (jsonObj.result.bcp47 || jsonObj.result.language)) ||
+                   (jsonObj.track && (jsonObj.track.bcp47 || jsonObj.track.language)));
+      if (lang && typeof lang === 'string') return lang;
+    }
+
+    if (typeof responseText === 'string') {
+      const xmlLangMatch = responseText.match(/(?:xml:)?lang=["']([^"']+)["']/i);
+      if (xmlLangMatch && xmlLangMatch[1]) {
+        return xmlLangMatch[1];
+      }
+      const vttLangMatch = responseText.match(/^Language:\s*([a-zA-Z0-9_-]+)/im);
+      if (vttLangMatch && vttLangMatch[1]) {
+        return vttLangMatch[1];
+      }
+    }
+
+    if (cues && cues.length > 0) {
+      const sampleText = cues.slice(0, 20).map(c => c.text).join(' ');
+      if (isJapaneseText(sampleText)) {
+        return 'ja';
+      }
+      if (/[\uAC00-\uD7AF\u1100-\u11FF]/.test(sampleText)) {
+        return 'ko';
+      }
+      if (/[\u0600-\u06FF]/.test(sampleText)) {
+        return 'ar';
+      }
+      if (/[\u0E00-\u0E7F]/.test(sampleText)) {
+        return 'th';
+      }
+      if (/[\u0400-\u04FF]/.test(sampleText)) {
+        return 'ru';
+      }
+      if (/[\u0370-\u03FF]/.test(sampleText)) {
+        return 'el';
+      }
+      if (/[\u0590-\u05FF]/.test(sampleText)) {
+        return 'he';
+      }
+    }
+
+    return null;
+  }
+
   // Intercept Network Requests (XHR & Fetch)
   function handleInterceptedSubtitles(responseText, url) {
     try {
+      let jsonObj = null;
+      if (typeof responseText === 'string' && (responseText.trim().startsWith('{') || responseText.trim().startsWith('['))) {
+        try { jsonObj = JSON.parse(responseText); } catch (e) {}
+      }
+
       const cues = parseSubtitlePayload(responseText, url);
       if (cues && cues.length > 0) {
-        const trackInfo = safeGet(() => getCurrentActiveTrackInfo(), { trackId: 'captured_track', bcp47: null });
-        const activeTrackId = pendingTrackId || trackInfo.trackId || 'captured_track';
-        const activeBcp47 = pendingTrackBcp47 || trackInfo.bcp47 || null;
+        const detectedLang = detectSubtitleLanguage(responseText, jsonObj, cues);
+        const player = getNetflixPlayer();
+        const timedTextTracks = safeGet(() => player && player.getTimedTextTrackList ? player.getTimedTextTrackList() : [], []);
+        const currentPrimary = safeGet(() => player && player.getTimedTextTrack ? player.getTimedTextTrack() : null);
 
-        log(`Intercepted ${cues.length} cues for trackId: ${activeTrackId}, bcp47: ${activeBcp47}`);
+        let activeTrackId = null;
+        let activeBcp47 = null;
+
+        const sampleText = cues.slice(0, 20).map(c => c.text).join(' ');
+        const hasJapanese = isJapaneseText(sampleText);
+        const isPendingJapanese = Boolean(pendingTrackBcp47 && pendingTrackBcp47.toLowerCase().startsWith('ja'));
+
+        // Check if this payload matches our pending track request
+        const isPendingMatch = Boolean(pendingTrackId) && (
+          (isPendingJapanese && (hasJapanese || isLanguageMatch(detectedLang, 'ja'))) ||
+          (!isPendingJapanese && !hasJapanese && (!detectedLang || isLanguageMatch(detectedLang, pendingTrackBcp47)))
+        );
+
+        if (pendingTrackId && isPendingMatch) {
+          activeTrackId = pendingTrackId;
+          activeBcp47 = pendingTrackBcp47 || detectedLang || (hasJapanese ? 'ja' : null);
+          log(`Captured requested secondary track: ${activeTrackId} (${activeBcp47}), cues: ${cues.length}`);
+
+          setTimeout(() => {
+            clearPendingTrack();
+          }, 150);
+        } else {
+          // In-flight primary or background track payload
+          let matchedTrack = null;
+          if (detectedLang && timedTextTracks.length > 0) {
+            matchedTrack = timedTextTracks.find((t) => 
+              isLanguageMatch(safeGet(() => t.bcp47 || t.language), detectedLang)
+            );
+          }
+          if (!matchedTrack && currentPrimary && !pendingTrackId) {
+            matchedTrack = currentPrimary;
+          }
+
+          if (matchedTrack) {
+            const idx = timedTextTracks.indexOf(matchedTrack);
+            activeTrackId = extractTrackId(matchedTrack, idx >= 0 ? idx : 0);
+            activeBcp47 = safeGet(() => matchedTrack.bcp47 || matchedTrack.language) || detectedLang;
+          } else {
+            const trackInfo = safeGet(() => getCurrentActiveTrackInfo(), { trackId: 'captured_track', bcp47: null });
+            activeTrackId = (previousPrimaryTrack ? extractTrackId(previousPrimaryTrack, 0) : null) || trackInfo.trackId || 'captured_track';
+            activeBcp47 = detectedLang || (previousPrimaryTrack ? safeGet(() => previousPrimaryTrack.bcp47 || previousPrimaryTrack.language) : null) || trackInfo.bcp47;
+          }
+
+          log(`Captured primary/background track: ${activeTrackId} (${activeBcp47}), cues: ${cues.length}`);
+        }
 
         window.postMessage({
           type: 'NETFLIX_DUAL_SUB_CAPTURED',
           url: String(url || ''),
-          trackId: String(activeTrackId),
+          trackId: String(activeTrackId || 'captured_track'),
           bcp47: activeBcp47 ? String(activeBcp47) : null,
           cues: cues
         }, '*');
-
-        if (pendingTrackId) {
-          setTimeout(() => {
-            clearPendingTrack();
-          }, 150);
-        }
       }
     } catch (err) {
       logError('Subtitle processing error:', err);
@@ -458,7 +561,11 @@
     parseVTT: parseVTT,
     isSubtitleUrl: isSubtitleUrl,
     extractResponseText: extractResponseText,
-    safeGet: safeGet
+    safeGet: safeGet,
+    isLanguageMatch: isLanguageMatch,
+    isJapaneseText: isJapaneseText,
+    detectSubtitleLanguage: detectSubtitleLanguage,
+    handleInterceptedSubtitles: handleInterceptedSubtitles
   };
 
 })();

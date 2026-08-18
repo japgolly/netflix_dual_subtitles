@@ -57,8 +57,8 @@
   // Helper to compare language codes (e.g. "ja" vs "ja-JP")
   function isLanguageMatch(lang1, lang2) {
     if (!lang1 || !lang2) return false;
-    const c1 = String(lang1).toLowerCase().split('-')[0];
-    const c2 = String(lang2).toLowerCase().split('-')[0];
+    const c1 = String(lang1).toLowerCase().split('-')[0].split('_')[0];
+    const c2 = String(lang2).toLowerCase().split('-')[0].split('_')[0];
     return c1 === c2;
   }
 
@@ -218,32 +218,39 @@
     if (!state.secondaryTrackId && !state.secondaryLanguageCode) return;
     if (!state.tracks || state.tracks.length === 0) return;
 
-    const baseLang = state.secondaryLanguageCode ? state.secondaryLanguageCode.split('-')[0] : null;
+    const targetLang = state.secondaryLanguageCode;
+    const baseLang = targetLang ? targetLang.split('-')[0].split('_')[0] : null;
 
-    // Check if we already have cues in memory for the secondary track (exact matches first!)
-    if (state.secondaryTrackId && state.cuesMap.has(state.secondaryTrackId)) {
-      autoFetchedSecondary = true;
-      return;
+    let match = null;
+    if (targetLang) {
+      match = state.tracks.find(t => 
+        (t.bcp47 && isLanguageMatch(t.bcp47, targetLang)) ||
+        (t.language && isLanguageMatch(t.language, targetLang)) ||
+        (t.label && isLanguageMatch(t.label, targetLang)) ||
+        (t.label && t.label.toLowerCase().includes(targetLang.toLowerCase()))
+      );
     }
-    if (state.secondaryLanguageCode && state.cuesMap.has(state.secondaryLanguageCode)) {
-      autoFetchedSecondary = true;
-      return;
+    if (!match && state.secondaryTrackId) {
+      match = state.tracks.find(t => t.id === state.secondaryTrackId);
     }
-    if (baseLang && state.cuesMap.has(baseLang)) {
+
+    if (match) {
+      state.secondaryTrackId = match.id;
+      if (match.bcp47 && !state.secondaryLanguageCode) {
+        state.secondaryLanguageCode = match.bcp47;
+      }
+    }
+
+    const hasCues = (targetLang && state.cuesMap.has(targetLang)) ||
+                    (baseLang && state.cuesMap.has(baseLang)) ||
+                    (match && state.cuesMap.has(match.id));
+
+    if (hasCues) {
       autoFetchedSecondary = true;
       return;
     }
 
     if (autoFetchedSecondary) return;
-
-    const match = state.tracks.find(t => 
-      t.id === state.secondaryTrackId || 
-      (state.secondaryLanguageCode && (t.bcp47 === state.secondaryLanguageCode || t.language === state.secondaryLanguageCode)) ||
-      (state.secondaryLanguageCode && (isLanguageMatch(t.bcp47, state.secondaryLanguageCode) || isLanguageMatch(t.language, state.secondaryLanguageCode))) ||
-      t.bcp47 === state.secondaryTrackId || 
-      t.language === state.secondaryTrackId ||
-      t.label.toLowerCase().includes((state.secondaryLanguageCode || state.secondaryTrackId).toLowerCase())
-    );
 
     if (match) {
       const targetId = match.id;
@@ -256,7 +263,10 @@
 
       // Retry after 2.5s if cues still haven't arrived
       setTimeout(() => {
-        if (!state.cuesMap.has(targetId) && (!state.secondaryLanguageCode || !state.cuesMap.has(state.secondaryLanguageCode))) {
+        const stillHasCues = (targetLang && state.cuesMap.has(targetLang)) ||
+                             (baseLang && state.cuesMap.has(baseLang)) ||
+                             state.cuesMap.has(targetId);
+        if (!stillHasCues) {
           log('Cues not arrived yet, resetting autoFetchedSecondary for retry');
           autoFetchedSecondary = false;
         }
@@ -322,15 +332,19 @@
       }
 
       let cues = null;
-      const baseLang = state.secondaryLanguageCode ? state.secondaryLanguageCode.split('-')[0] : null;
+      const targetLang = state.secondaryLanguageCode;
+      const baseLang = targetLang ? targetLang.split('-')[0].split('_')[0] : null;
 
-      // Exact track ID first, then exact BCP-47 code, then fallback base language
-      if (state.secondaryTrackId && state.cuesMap.has(state.secondaryTrackId)) {
-        cues = state.cuesMap.get(state.secondaryTrackId);
-      } else if (state.secondaryLanguageCode && state.cuesMap.has(state.secondaryLanguageCode)) {
-        cues = state.cuesMap.get(state.secondaryLanguageCode);
+      // Exact BCP-47 code / base language first, then track ID if matching language
+      if (targetLang && state.cuesMap.has(targetLang)) {
+        cues = state.cuesMap.get(targetLang);
       } else if (baseLang && state.cuesMap.has(baseLang)) {
         cues = state.cuesMap.get(baseLang);
+      } else if (state.secondaryTrackId && state.cuesMap.has(state.secondaryTrackId)) {
+        const trackObj = state.tracks.find(t => t.id === state.secondaryTrackId);
+        if (!targetLang || !trackObj || isLanguageMatch(trackObj.bcp47 || trackObj.language, targetLang)) {
+          cues = state.cuesMap.get(state.secondaryTrackId);
+        }
       }
 
       if (!cues || cues.length === 0) {
@@ -605,7 +619,7 @@
     const signatureParts = [];
     state.tracks.forEach(t => signatureParts.push(`${t.id}:${t.label}:${t.bcp47}`));
     state.cuesMap.forEach((cues, key) => signatureParts.push(`${key}:${cues.length}`));
-    const newSignature = signatureParts.join('|') + `|selected:${state.secondaryTrackId}`;
+    const newSignature = signatureParts.join('|') + `|selected:${state.secondaryTrackId}|lang:${state.secondaryLanguageCode}`;
 
     if (newSignature === lastPopulatedTrackSignature && dropdownMenu.children.length > 0) {
       return;
@@ -614,9 +628,11 @@
 
     dropdownMenu.innerHTML = '';
     const currentVal = state.secondaryTrackId;
+    const currentLang = state.secondaryLanguageCode;
     let selectedLabelText = '';
 
     const addedIds = new Set();
+    const hasLanguageMatch = Boolean(currentLang && state.tracks.some(t => isLanguageMatch(t.bcp47 || t.language, currentLang)));
     const trackHasExactMatch = state.tracks.some(t => t.id === currentVal);
 
     state.tracks.forEach((t, idx) => {
@@ -628,9 +644,10 @@
       const displayLabel = formatLanguageLabel(t.label, t.bcp47 || t.language);
       const isPrimary = (trackId === state.currentPrimaryTrackId);
       const fullLabel = displayLabel + (isPrimary ? ' (Primary)' : '');
-      const isSelected = trackHasExactMatch 
-        ? (trackId === currentVal)
-        : (Boolean(state.secondaryLanguageCode && isLanguageMatch(t.bcp47 || t.language, state.secondaryLanguageCode)));
+
+      const isSelected = hasLanguageMatch
+        ? isLanguageMatch(t.bcp47 || t.language, currentLang)
+        : (trackHasExactMatch ? trackId === currentVal : false);
 
       if (isSelected || (!selectedLabelText && idx === 0)) {
         selectedLabelText = fullLabel;
