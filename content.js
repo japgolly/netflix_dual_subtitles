@@ -62,15 +62,29 @@
     return c1 === c2;
   }
 
+  function isExtensionContextValid() {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.runtime) return false;
+      if (chrome.runtime.id === undefined && 'id' in chrome.runtime) return false;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Inject main world script (injected.js)
   function injectMainWorldScript() {
-    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.getURL) return;
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('injected.js');
-    script.onload = function () {
-      this.remove();
-    };
-    (document.head || document.documentElement).appendChild(script);
+    if (!isExtensionContextValid() || !chrome.runtime.getURL) return;
+    try {
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('injected.js');
+      script.onload = function () {
+        this.remove();
+      };
+      (document.head || document.documentElement).appendChild(script);
+    } catch (e) {
+      log('Could not inject main world script:', e);
+    }
   }
 
   injectMainWorldScript();
@@ -142,74 +156,96 @@
   }
 
   // Load saved preferences
-  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-    chrome.storage.sync.get(['nds_enabled', 'nds_furigana', 'nds_fontSize', 'nds_position', 'nds_textStyle', 'nds_secondaryTrackId', 'nds_secondaryLanguageCode'], (res) => {
-      if (!res) return;
-      if (res.nds_enabled !== undefined) state.enabled = res.nds_enabled;
-      if (res.nds_furigana !== undefined) state.furigana = res.nds_furigana;
-      if (res.nds_fontSize) state.fontSize = res.nds_fontSize;
-      if (res.nds_position) state.position = res.nds_position;
-      if (res.nds_textStyle) state.textStyle = res.nds_textStyle;
-      if (res.nds_secondaryTrackId) state.secondaryTrackId = res.nds_secondaryTrackId;
-      if (res.nds_secondaryLanguageCode) state.secondaryLanguageCode = res.nds_secondaryLanguageCode;
-      
-      updateOverlayStyles();
-      checkAndAutoFetchSecondaryTrack();
-    });
+  if (isExtensionContextValid() && chrome.storage && chrome.storage.sync) {
+    try {
+      chrome.storage.sync.get(['nds_enabled', 'nds_furigana', 'nds_fontSize', 'nds_position', 'nds_textStyle', 'nds_secondaryTrackId', 'nds_secondaryLanguageCode'], (res) => {
+        try {
+          if (!isExtensionContextValid() || (chrome.runtime && chrome.runtime.lastError) || !res) return;
+          if (res.nds_enabled !== undefined) state.enabled = res.nds_enabled;
+          if (res.nds_furigana !== undefined) state.furigana = res.nds_furigana;
+          if (res.nds_fontSize) state.fontSize = res.nds_fontSize;
+          if (res.nds_position) state.position = res.nds_position;
+          if (res.nds_textStyle) state.textStyle = res.nds_textStyle;
+          if (res.nds_secondaryTrackId) state.secondaryTrackId = res.nds_secondaryTrackId;
+          if (res.nds_secondaryLanguageCode) state.secondaryLanguageCode = res.nds_secondaryLanguageCode;
+          
+          updateOverlayStyles();
+          checkAndAutoFetchSecondaryTrack();
+        } catch (e) {}
+      });
+    } catch (e) {
+      log('Could not get initial preferences:', e);
+    }
   }
 
   // Listen for real-time preferences changes (e.g. from popup or other tabs)
-  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== 'sync' && areaName !== 'local') return;
-      if (changes.nds_enabled !== undefined) {
-        state.enabled = Boolean(changes.nds_enabled.newValue);
-        const enableCb = document.getElementById('nds-toggle-enable');
-        if (enableCb) enableCb.checked = state.enabled;
-        if (triggerBtnEl) triggerBtnEl.classList.toggle('active', state.enabled);
-        if (!state.enabled && cueBoxEl) cueBoxEl.style.display = 'none';
-      }
-      if (changes.nds_furigana !== undefined) {
-        state.furigana = Boolean(changes.nds_furigana.newValue);
-        const furiganaCb = document.getElementById('nds-toggle-furigana');
-        if (furiganaCb) furiganaCb.checked = state.furigana;
-      }
-      if (changes.nds_fontSize !== undefined) {
-        state.fontSize = changes.nds_fontSize.newValue;
-        updateOverlayStyles();
-      }
-      if (changes.nds_position !== undefined) {
-        state.position = changes.nds_position.newValue;
-        updateOverlayStyles();
-      }
-      if (changes.nds_textStyle !== undefined) {
-        state.textStyle = changes.nds_textStyle.newValue;
-        updateOverlayStyles();
-      }
-      if (changes.nds_secondaryTrackId !== undefined) {
-        state.secondaryTrackId = changes.nds_secondaryTrackId.newValue;
-        populateLanguageSelect();
-        checkAndAutoFetchSecondaryTrack();
-      }
-      if (changes.nds_secondaryLanguageCode !== undefined) {
-        state.secondaryLanguageCode = changes.nds_secondaryLanguageCode.newValue;
-        populateLanguageSelect();
-        checkAndAutoFetchSecondaryTrack();
-      }
-    });
+  if (isExtensionContextValid() && chrome.storage && chrome.storage.onChanged) {
+    try {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        try {
+          if (!isExtensionContextValid()) return;
+          if (areaName !== 'sync' && areaName !== 'local') return;
+          if (changes.nds_enabled !== undefined) {
+            state.enabled = Boolean(changes.nds_enabled.newValue);
+            const enableCb = document.getElementById('nds-toggle-enable');
+            if (enableCb) enableCb.checked = state.enabled;
+            if (triggerBtnEl) triggerBtnEl.classList.toggle('active', state.enabled);
+            if (!state.enabled && cueBoxEl) cueBoxEl.style.display = 'none';
+          }
+          if (changes.nds_furigana !== undefined) {
+            state.furigana = Boolean(changes.nds_furigana.newValue);
+            const furiganaCb = document.getElementById('nds-toggle-furigana');
+            if (furiganaCb) furiganaCb.checked = state.furigana;
+          }
+          if (changes.nds_fontSize !== undefined) {
+            state.fontSize = changes.nds_fontSize.newValue;
+            updateOverlayStyles();
+          }
+          if (changes.nds_position !== undefined) {
+            state.position = changes.nds_position.newValue;
+            updateOverlayStyles();
+          }
+          if (changes.nds_textStyle !== undefined) {
+            state.textStyle = changes.nds_textStyle.newValue;
+            updateOverlayStyles();
+          }
+          if (changes.nds_secondaryTrackId !== undefined) {
+            state.secondaryTrackId = changes.nds_secondaryTrackId.newValue;
+            populateLanguageSelect();
+            checkAndAutoFetchSecondaryTrack();
+          }
+          if (changes.nds_secondaryLanguageCode !== undefined) {
+            state.secondaryLanguageCode = changes.nds_secondaryLanguageCode.newValue;
+            populateLanguageSelect();
+            checkAndAutoFetchSecondaryTrack();
+          }
+        } catch (e) {}
+      });
+    } catch (e) {
+      log('Could not register storage change listener:', e);
+    }
   }
 
   function savePreferences() {
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-      chrome.storage.sync.set({
-        nds_enabled: state.enabled,
-        nds_furigana: state.furigana,
-        nds_fontSize: state.fontSize,
-        nds_position: state.position,
-        nds_textStyle: state.textStyle,
-        nds_secondaryTrackId: state.secondaryTrackId,
-        nds_secondaryLanguageCode: state.secondaryLanguageCode
-      });
+    if (!isExtensionContextValid()) return;
+    try {
+      if (chrome.storage && chrome.storage.sync) {
+        chrome.storage.sync.set({
+          nds_enabled: state.enabled,
+          nds_furigana: state.furigana,
+          nds_fontSize: state.fontSize,
+          nds_position: state.position,
+          nds_textStyle: state.textStyle,
+          nds_secondaryTrackId: state.secondaryTrackId,
+          nds_secondaryLanguageCode: state.secondaryLanguageCode
+        }, () => {
+          if (chrome.runtime && chrome.runtime.lastError) {
+            log('Storage set error:', chrome.runtime.lastError.message);
+          }
+        });
+      }
+    } catch (err) {
+      log('Could not save preferences (extension context may have been invalidated):', err);
     }
   }
 
@@ -778,7 +814,9 @@
   window.__netflixDualSubsContentUtils = {
     formatLanguageLabel: formatLanguageLabel,
     isLanguageMatch: isLanguageMatch,
-    getWatchVideoId: getWatchVideoId
+    getWatchVideoId: getWatchVideoId,
+    isExtensionContextValid: isExtensionContextValid,
+    savePreferences: savePreferences
   };
 
 })();

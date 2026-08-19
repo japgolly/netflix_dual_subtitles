@@ -36,7 +36,12 @@
 
     initPromise = new Promise((resolve) => {
       try {
-        const dictPath = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL('dict/') : './dict/';
+        let dictPath = './dict/';
+        try {
+          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id && chrome.runtime.getURL) {
+            dictPath = chrome.runtime.getURL('dict/');
+          }
+        } catch (e) {}
         log('Initializing Kuromoji.js with dictPath:', dictPath);
 
         kuromojiLib.builder({ dicPath: dictPath }).build((err, tokenizer) => {

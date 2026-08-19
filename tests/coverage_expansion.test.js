@@ -246,5 +246,46 @@ describe('Comprehensive Coverage Expansion Suite', () => {
       const dropdownSelected = document.getElementById('nds-dropdown-selected-label');
       expect(dropdownSelected).toBeDefined();
     });
+
+    it('should safely handle extension context invalidation without throwing uncaught errors', () => {
+      const utils = window.__netflixDualSubsContentUtils;
+      expect(typeof utils.isExtensionContextValid).toBe('function');
+      expect(typeof utils.savePreferences).toBe('function');
+
+      // Test valid context
+      global.chrome = {
+        runtime: { id: 'valid_id' },
+        storage: {
+          sync: {
+            set: (data, cb) => { if (cb) cb(); }
+          }
+        }
+      };
+      expect(utils.isExtensionContextValid()).toBe(true);
+      expect(() => utils.savePreferences()).not.toThrow();
+
+      // Test invalidated context where chrome.runtime.id is undefined
+      global.chrome = {
+        runtime: { id: undefined },
+        storage: {
+          sync: {
+            set: () => { throw new Error('Extension context invalidated.'); }
+          }
+        }
+      };
+      expect(utils.isExtensionContextValid()).toBe(false);
+      expect(() => utils.savePreferences()).not.toThrow();
+
+      // Test threw inside storage.set directly
+      global.chrome = {
+        runtime: { id: 'some_id' },
+        storage: {
+          sync: {
+            set: () => { throw new Error('Extension context invalidated.'); }
+          }
+        }
+      };
+      expect(() => utils.savePreferences()).not.toThrow();
+    });
   });
 });
