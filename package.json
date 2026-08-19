@@ -1,6 +1,6 @@
 {
   "name": "netflix_dual_subtitles",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "A Manifest V3 Chrome Extension that allows you to render two subtitle tracks simultaneously on Netflix with automatic timestamp synchronization.",
   "main": "content.js",
   "scripts": {
